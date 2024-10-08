@@ -1,0 +1,870 @@
+---
+title: "Heart Disease Prediction"
+author: "Rita Han"
+date: "2022-11-23"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    code_folding: hide
+    toc: yes
+    toc_float: yes
+    theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = F
+                      )
+# packages
+#install.packages('finetune')
+library(parsnip)
+library(tidyverse)
+library(tidymodels)
+library(finetune)
+library(ggplot2)
+library(janitor)
+library(corrr)
+library(corrplot)
+library(ISLR)
+library(rpart.plot)
+library(vip)
+library(randomForest)
+library(xgboost)
+set.seed(2023)
+```
+\newpage
+
+\newpage
+
+# 1.0 Abstract
+## Introduction
+Modern days, people are busy with lives and satisfaction on materialistic needs, but neglect of body and mental health. This cause more and more heart suffer with various causes. Heart is the most crucial organ inside human body. Cardiovascular disease(heart disease) are #1 cause of death globally, which can take 17.9 million lives per year in estimation. This occupies 31% of all deaths worldwide.   
+People with heart disease need early detection due to its high risk of death. In this case, machine learning model can be a great helper. Thus, I choose the heart failure prediction dataset to predict if someone is at high risk of being diagonised with heart disease. This dataset contains 11 features that can be used to predict possible heart disease. I first got to know the dataset and visualized it and then use cross-validation for the machine to better learn the data and to tune machine learning models: Random Forest, XGBoost, KNN, Decision Tree to compare which model perform the best on the train set in order prediction on the test set.   
+
+## Description of the Dataset
+The Heart Failure Prediction Dataset was created by combining five different datasets with observations from different places among the world, with total 918 observations and 11 variables that can be possible predictors and our target variable 'heart_disease'.   
+-Age: age of the patient [years]  
+-Sex: sex of the patient [M: Male, F: Female]  
+-ChestPainType: chest pain type [TA: Typical Angina, ATA:   Atypical Angina, NAP: Non-Anginal Pain, ASY: Asymptomatic]  
+-RestingBP: resting blood pressure [mm Hg]  
+-Cholesterol: serum cholesterol [mm/dl]  
+-FastingBS: fasting blood sugar [1: if FastingBS > 120 mg/dl, 0: otherwise]  
+-RestingECG: resting electrocardiogram results [Normal: Normal, ST: having ST-T wave abnormality (T wave inversions and/or ST elevation or depression of > 0.05 mV), LVH: showing probable or definite left ventricular hypertrophy by Estes' criteria]  
+-MaxHR: maximum heart rate achieved [Numeric value between 60 and 202]  
+-ExerciseAngina: exercise-induced angina [Y: Yes, N: No]  
+-Oldpeak: oldpeak = ST [Numeric value measured in depression]  
+-ST_Slope: the slope of the peak exercise ST segment [Up: upsloping, Flat: flat, Down: downsloping]  
+-HeartDisease: output class [1: heart disease, 0: Normal]  
+
+```{r}
+#input file and use clean_names() function to put variables into a clear format
+heart = read_csv("/Users/ritahan/Desktop/pstat131/heart.csv") %>% 
+  clean_names() 
+```
+
+
+```{r}
+#display the first couple lines of the dataset
+heart$heart_disease=as.character(heart$heart_disease)
+heart$fasting_bs=as.character(heart$fasting_bs)
+heart= heart %>%
+  filter(heart$cholesterol != 0)
+
+```
+
+```{r}
+
+heart=heart %>%
+  mutate(fasting_bs=factor(fasting_bs),
+         heart_disease=factor(heart_disease),
+         chest_pain_type=factor(chest_pain_type),
+         resting_ecg=factor(resting_ecg),
+         exercise_angina=factor(exercise_angina)) 
+heart %>%
+  head()
+```
+
+```{r}
+heart %>%
+  summary()
+```
+I first make 'heart_disease and 'fasting_bs' to characters, then it's easy to mutate all characteristic variables to factors for further prediction. I filtered out the observations with cholesterol equal to 0. Obtain a cholesterol equal to 0 is very rare, so we can regard these as no observation. Thus, filter them out for further analysis might be a good idea.  
+
+# 2.0 EDA
+The data is already a cleaned one! Let's get a deeper understanding of the dataset, I first visualized the distribution of the '1' and '0' from 'heart_disease'. Then, I made a correlation heatmap for all numeric variables to see if there is any interesting correlations. Next, I visualize the numeric variables with density plots fill by heart_disease, which can easily see the relationship between each numeric variable and heart disease. And, for categorical variables, I used barplot fill by 'heart_disease' and boxplot to explore some interesting relationships.   
+## heart_disease count
+```{r}
+
+heartdisease_counting <- heart %>%
+    group_by(heart_disease) %>%
+    summarise(Count = n())
+
+ggplot(data = heartdisease_counting, aes(x = heart_disease,
+                                         y = Count)) +
+    geom_histogram(stat = "identity", fill = c("red", "blue"))
+```
+```{r}
+percent_heartdisease <- percent(heartdisease_counting$Count[1]/sum(heartdisease_counting$Count),
+    accuracy = 0.01)
+percent_heartdisease
+```
+
+From this plot, we can see there are 52.28% of the dataset is observed with heart disease.  
+
+## correlations
+```{r}
+heart %>% 
+  select(is.numeric) %>% 
+  cor() %>% 
+  corrplot()
+```
+From this correlation heatmap, we can see max_hr is negatively correlated with age, this makes sense because maximum heart rate achieved often happens on younger people. Additionally, 'resting_bp','fasting_bs',‘oldpeak', are positively correlated with age, since older people usually have high blood pressure, sugar.  
+
+## Numerical variables
+```{r}
+plot_histogram <- function(df, var1, var2) {
+    # From object to string: deparse(substitute(varname))
+    var1name <- as.name(var1)
+    df %>%
+        ggplot(aes(x = {
+            {
+                var1name
+            }
+        }, fill = {
+            {
+                var2
+            }
+        })) + geom_histogram(alpha = 0.75, position = "stack",
+        color = "black", bins = 30) + geom_vline(aes(xintercept = median({
+        {
+            var1name
+        }
+    })), linetype = 2, size = 1) + labs(caption = paste0("Median ",
+        {
+            {
+                var1
+            }
+        }, " is ", round(median({
+            {
+                df
+            }
+        }[[{
+            {
+                var1
+            }
+        }]]), 2)), y = element_blank(), x = element_blank(),
+        title = paste0({
+            {
+                var1
+            }
+        })) + theme(legend.position = "none")
+}
+
+plot_density <- function(df, var1, var2) {
+    var1name <- as.name(var1)
+    df %>%
+        ggplot(aes(x = {
+            {
+                var1name
+            }
+        }, fill = {
+            {
+                var2
+            }
+        })) + geom_density(alpha = 0.5, color = "black") + geom_vline(data = df %>%
+        group_by({
+            {
+                var2
+            }
+        }) %>%
+        summarize(mean.grp = mean({
+            {
+                var1name
+            }
+        })), aes(xintercept = mean.grp, color = heart_disease), linetype = "dashed",
+        size = 1) + labs(caption = paste0("Lines represent average by group"),
+        y = element_blank(), x = element_blank(), title = "")
+}
+
+plot_2plots <- function(df, var1, var2) {
+    p1 <- plot_histogram({
+        {
+            df
+        }
+    }, {
+        {
+            var1
+        }
+    }, {
+        {
+            var2
+        }
+    })
+    p2 <- plot_density({
+        {
+            df
+        }
+    }, {
+        {
+            var1
+        }
+    }, {
+        {
+            var2
+        }
+    })
+
+    grid.arrange(p1, p2, ncol = 2)
+
+}
+plot_2plots(heart, "age", heart_disease)
+```
+From the age plots, we can easily see that heart disease occur more on old people.
+```{r}
+plot_2plots(heart, "resting_bp", heart_disease)
+```
+From the resting_bp plots, we can see that when resting blood pressure is between 100-150 mmhg, the occurance of heart-disdease is basically half-half; but when exceeding 150mmhg, the occurance of heart-disease increases a little.   
+
+```{r}
+plot_2plots(heart, "max_hr", heart_disease)
+```
+From the max_hr graphs, there is a negative correlation between max_hr and heart_disease. People who acheive higher heart rate have less probibility to get heart disease.  
+
+```{r}
+plot_2plots(heart, "oldpeak", heart_disease)
+```
+'Oldpeak' means a depressed/lower line on an ECG induced by exercise. We can easily see that people with high oldpeak get heart disease more than people with low oldpeak.
+  
+
+## Categorical variables
+
+```{r}
+#barplot of sex fill by heart_disease
+options(repr.plot.width = 10, repr.plot.height = 10)
+ggplot(heart) + geom_bar(aes(x = sex, color = heart_disease,
+    fill = heart_disease)) + ggtitle("Sex") + labs(x = "sex",
+    y = "Count")
+```
+```{r}
+#boxplot of sex and age
+ggplot(heart, aes(reorder(sex, age), age)) +
+  geom_boxplot(varwidth = TRUE) + 
+  coord_flip() +
+  labs(
+    title = "Sex by Age",
+    x = "sex"
+  )
+
+```
+
+
+From the Sex graph, the observations of male is much higher than the one of female. Thus, we only concentrate on the heart disease proportion for each sex. Male with heart disease have slightly higher proportion among all male, but female with heart disease have a much lower proportion among all female. Also, with the help from sex by age boxplot, we see that the observations of male and female are basically selected from the same age range. Thus, we can conclude that, according to this dataset, male is much likely to get heart disease.
+
+
+```{r}
+#barplot of chest pain type fill by heart_disease
+options(repr.plot.width = 10, repr.plot.height = 10)
+ggplot(heart) + geom_bar(aes(x = chest_pain_type, color = heart_disease,
+    fill = heart_disease)) + ggtitle("Chest Pain Type") + labs(x = "pain type",
+    y = "Count")
+```
+The graph chest pain type above clearly shows 'ASY' chest pain type has a high probobility to cause heart disease, but the others are not likewise; especially, 'ATA' and 'NAP' are less likely to cause heart disease. The observasions of 'TA' is fewer, but the proportion of causing heart disease or not is close to 50%. 
+
+```{r}
+#boxplot of chest pain type and age
+ggplot(heart, aes(reorder(chest_pain_type, age), age)) +
+  geom_boxplot(varwidth = TRUE) + 
+  coord_flip() +
+  labs(
+    title = "Chest Pain Type by Age",
+    x = "Chest Pain Type"
+  )
+
+```
+
+```{r}
+#boxplot of heart-disease and age
+ggplot(heart, aes(reorder(heart_disease, age), age)) +
+  geom_boxplot(varwidth = TRUE) + 
+  coord_flip() +
+  labs(
+    title = "Heart Disease by Age",
+    x = "Heart Disease"
+  )
+
+```
+The 'chest pain type by age' graph and the 'heart disease by age' graph both supports the result from the previous chest pain type bar plot. Age can be an important cause of heart disease. Older people are more likely have heart disease than younger ones. Moreover, the 'ATA' and 'NAP' are seen more in younger people. Thus, these two types are less likely to relate to heart disease. 'TA' and 'ASY' occur more on older people. Thus, they have a higher relation to heart disease. And since, both 'TA' and 'ASY' are roughly ranged between age of 50-60, we can conclude that age of 50-60 might be a common period to get heart disease.  
+```{r}
+#barplot of restingECG fill by heart_disease
+options(repr.plot.width = 10, repr.plot.height = 10)
+ggplot(heart) + geom_bar(aes(x = resting_ecg, color = heart_disease,
+    fill = heart_disease)) + ggtitle("Resting Electrocardiogram") + labs(x = "resting_ecg",
+    y = "Count")
+```
+From the resting electrocardiogram barplot, base on this particular dataset, we can conclude that people with normal restingECG have a slightly lower proportion of having heart disease, people with 'LVH','ST' have a higher proportion of having heart disease, which make sense because normal resting ECG means the heart is at a relatively good condition.  
+
+```{r}
+#barplot of exerciseangina fill by heart_disease
+options(repr.plot.width = 10, repr.plot.height = 10)
+ggplot(heart) + geom_bar(aes(x = exercise_angina, color = heart_disease,
+    fill = heart_disease)) + ggtitle("Exercise Angina") + labs(x = "exercise_angina",
+    y = "Count")
+```
+From the Exercise angina graph, it is obvious that people with exercise induced angina are much more likely to have heart disease. Angina occurs when the heart needs more oxygen-rich blood but the demand is not met, which can be a big influencer of heart disease.  
+
+```{r}
+#barplot of st_slope fill by heart_disease
+options(repr.plot.width = 10, repr.plot.height = 10)
+ggplot(heart) + geom_bar(aes(x = st_slope, color = heart_disease,
+    fill = heart_disease)) + ggtitle("The slope of ST") + labs(x = "st_slope",
+    y = "Count")
+```
+From the slope of ST graph, we see that upward slope is less likely to be related to heart disease, however, flat and downward slope have a high relationship with heart disease.  
+Thus, we can conclude from the EDA section that Age is a important factor that influence the target variable and also other variables, except 'cholesterol' which isn't really influenced by age, however, other variables doesn't really correlate with each other.  
+
+# 3.0 Set Up for Model Building
+With a deeper understanding of the data, we are going to prepare for the model building. I first split the data into train and test set, make a recipe and do a cross-validation for resampling.  
+## train and testing split
+```{r}
+heart_split <- heart %>% 
+  initial_split(prop = 0.8, strata = "heart_disease")
+
+heart_train <- training(heart_split)
+heart_test <- testing(heart_split)
+```
+
+```{r}
+dim(heart_train)
+```
+```{r}
+dim(heart_test)
+```
+There are 596 observations in the train set, and 150 observations in the test set. Stratified sampling was used on the response variable 'heart_disease'.  
+
+## Recipe Building
+We will create the recipe with dummy-coding categorical variables, and center and scale all predictors for model usage. 
+```{r}
+heart_recipe=recipe(heart_disease ~ . , data=heart_train) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_normalize(all_predictors())
+```
+
+## K-Fold Cross Validation
+```{r}
+heart_folds <- vfold_cv(heart_train, v = 10, strata = heart_disease)  # 10-fold CV
+```
+
+# 3.0Model Building
+We are ready for model building! The four model I used are Random Forest, XGBoost, KNN, Decision Tree. I first tried to create a regular grid to tune the random forest, and then tried to let the tidymodel tune by default. After comparing the result, they are both time-consuming, especially when I specified to a higher level, and the result is really close, so I decided to choose tuning by default.   
+
+## Random Forest
+```{r}
+rf_model <- 
+  rand_forest() %>% 
+  set_engine("randomForest") %>%
+  set_mode("classification") %>%
+  set_args(mtry = tune(), trees = tune(), min_n = tune())
+  
+```
+
+```{r}
+rf_wf <-
+  workflow() %>%
+  add_model(rf_model) %>% 
+  add_recipe(heart_recipe)
+rf_wf
+```
+
+Create regular grid to tune with specified ranges.
+```{r}
+# rf_grid=grid_regular(mtry(range = c(2,10)),
+#                              trees(range = c(100, 1300)),
+#                              min_n(range = c(5, 35)),
+#                              levels = 4)
+
+```
+
+
+```{r}
+# rf_tune=tune_grid(rf_wf,
+#                   resamples=heart_folds,
+#                   grid=rf_grid,
+#                   metrics=metric_set(accuracy))
+
+```
+I save the rf_grid, rf_tune into a rda for time-saving
+```{r}
+#save(rf_grid, rf_tune, file=
+#       "/Users/ritahan/Desktop/pstat131/rfgrid.rda")
+```
+
+```{r}
+load("/Users/ritahan/Desktop/pstat131/rfgrid.rda")
+```
+
+
+```{r}
+autoplot(rf_tune)
+```
+```{r}
+rf_tune_final <- rf_tune %>%
+  select_best(metric = "accuracy")
+rf_tune_final
+```
+
+```{r}
+rf_tune_wf <- rf_wf %>%
+  finalize_workflow(rf_tune_final)
+rf_tune_wf
+```
+
+```{r}
+#fitting the final workflow to the train set(create regular grid to tune)
+rf_tune_fit=fit(rf_tune_wf, heart_train)
+#accuracy of rf model
+rf_tune_acc <- predict(rf_tune_fit, new_data = heart_train, type = "class") %>% 
+  bind_cols(heart_train %>% 
+              select(heart_disease)) %>%
+  accuracy(truth = heart_disease, estimate = .pred_class)
+rf_tune_acc
+```
+rf on test set
+```{r}
+rf_tune_acc_test <- predict(rf_tune_fit, new_data = heart_test,
+                            type = "class") %>%
+  bind_cols(heart_test %>% 
+              select(heart_disease)) %>%
+  accuracy(truth = heart_disease, estimate = .pred_class)
+rf_tune_acc_test
+```
+
+
+
+
+
+
+
+Next, I will try do not create grid and let 'tidymodel' to chose the range for parameters by default.
+```{r}
+rf_results <-
+  rf_wf %>%
+  tune_grid(resamples = heart_folds,
+            metrics = metric_set(accuracy)
+  )
+```
+
+
+
+```{r}
+autoplot(rf_results)
+```
+
+```{r}
+rf_results %>%
+  collect_metrics()
+```
+
+
+
+
+```{r}
+rf_param_final <- rf_results %>%
+  select_best(metric = "accuracy")
+rf_param_final
+```
+```{r}
+final_rf_wf <- rf_wf %>%
+  finalize_workflow(rf_param_final)
+final_rf_wf
+```
+
+```{r}
+#fitting the final workflow to the train set
+rf_fit=fit(final_rf_wf, heart_train)
+#accuracy of rf model
+rf_acc <- predict(rf_fit, new_data = heart_train, type = "class") %>%
+  bind_cols(heart_train %>%
+              select(heart_disease)) %>%
+  accuracy(truth = heart_disease, estimate = .pred_class)
+rf_acc
+```
+```{r}
+#fitting the final workflow to the test set(tuning by default)
+rf_fit=fit(final_rf_wf, heart_test)
+#accurary of rf model
+rf_acc_test <- predict(rf_fit, new_data = heart_test, type = "class") %>%
+  bind_cols(heart_test %>%
+              select(heart_disease)) %>%
+  accuracy(truth = heart_disease, estimate = .pred_class)
+rf_acc_test
+```
+
+
+```{r}
+rf_fit %>% 
+  extract_fit_engine() %>% 
+  vip()
+```
+
+Through comparing the results of creating a regular grid to tune and letting 'tidymodel' to chose the range for parameters and tune by default. I found that creating regular grid to tune is more time-consuming and the accuracy on test set is really close and even worse than the tuning by default(0.88<0.89). Thus, for the rest of the model, I choose to tune it by default for time-saving and relatively good accuracy.
+
+
+## XGBoost
+```{r}
+xgb_model <- 
+  boost_tree() %>% 
+  set_engine("xgboost") %>%
+  set_mode("classification") %>%
+  set_args( trees = tune(),min_n = tune(),
+            tree_depth = tune(),
+            learn_rate = tune(),
+            loss_reduction = tune(),
+            sample_size = tune(),
+            stop_iter = tune())
+  
+```
+
+```{r}
+xgb_wf <-
+  workflow() %>%
+  add_model(xgb_model) %>% 
+  add_recipe(heart_recipe)
+xgb_wf
+```
+
+```{r}
+# xgb_results <-
+#   xgb_wf %>%
+#   tune_grid(resamples = heart_folds,
+#             metrics = metric_set(accuracy)
+#   )
+```
+
+```{r}
+#save(xgb_results, file="/Users/ritahan/Desktop/pstat131/xgbresults.rda")
+```
+```{r}
+load("/Users/ritahan/Desktop/pstat131/xgbresults.rda")
+```
+
+
+```{r}
+xgb_results %>%
+  collect_metrics()
+```
+```{r}
+autoplot(xgb_results)
+```
+
+
+```{r}
+xgb_param_final <- xgb_results %>%
+  select_best(metric = "accuracy")
+xgb_param_final
+```
+
+```{r}
+final_xgb_wf <- xgb_wf %>%
+  finalize_workflow(xgb_param_final)
+final_xgb_wf
+```
+
+```{r}
+#fitting the final workflow to the train set
+xgb_fit=fit(final_xgb_wf, heart_train)
+#accurary of xgb model
+xgb_acc <- predict(xgb_fit, new_data = heart_train, type = "class") %>% 
+  bind_cols(heart_train %>% 
+              select(heart_disease)) %>%
+  accuracy(truth = heart_disease, estimate = .pred_class)
+xgb_acc
+```
+```{r}
+xgb_fit %>% 
+  extract_fit_engine() %>% 
+  vip()
+```
+
+
+
+
+## KNN
+```{r}
+#install.packages("kknn") 
+library(kknn)
+```
+
+```{r}
+knn_model <- 
+  nearest_neighbor() %>% 
+  set_engine("kknn") %>%
+  set_mode("classification") %>%
+  set_args(neighbors = tune(),
+           weight_func = tune(),
+           dist_power = tune())
+  
+```
+
+```{r}
+knn_wf <-
+  workflow() %>%
+  add_model(knn_model) %>% 
+  add_recipe(heart_recipe)
+knn_wf
+```
+
+
+```{r}
+# knn_results <-
+#   knn_wf %>% 
+#   tune_grid(resamples = heart_folds,
+#             metrics = metric_set(accuracy)
+#   )
+
+```
+
+```{r}
+#save(knn_results, file="/Users/ritahan/Desktop/pstat131/knnresults.rda")
+```
+```{r}
+load("/Users/ritahan/Desktop/pstat131/knnresults.rda")
+```
+
+
+```{r}
+knn_results %>%
+  collect_metrics()
+```
+```{r}
+autoplot(knn_results)
+```
+
+
+```{r}
+knn_param_final <- knn_results %>%
+  select_best(metric = "accuracy")
+knn_param_final
+```
+
+```{r}
+final_knn_wf <- knn_wf %>%
+  finalize_workflow(knn_param_final)
+final_knn_wf
+```
+
+
+
+```{r}
+#fitting the final workflow to the train set
+knn_fit=fit(final_knn_wf, heart_train)
+#accurary of knn model
+knn_acc <- predict(knn_fit, new_data = heart_train, type = "class") %>% 
+  bind_cols(heart_train %>% 
+              select(heart_disease)) %>%
+  accuracy(truth = heart_disease, estimate = .pred_class)
+knn_acc
+```
+
+
+
+## Decision tree
+```{r}
+dt_model <- 
+  decision_tree() %>% 
+  set_engine("rpart") %>%
+  set_mode("classification") %>%
+  set_args(cost_complexity = tune(),
+                tree_depth = tune(),
+                min_n = tune())
+  
+```
+
+```{r}
+dt_wf <-
+  workflow() %>%
+  add_model(dt_model) %>% 
+  add_recipe(heart_recipe)
+dt_wf
+```
+
+```{r}
+dt_results <-
+  dt_wf %>% 
+  tune_grid(resamples = heart_folds,
+            metrics = metric_set(accuracy)
+  )
+```
+
+```{r}
+#save(dt_results, file="/Users/ritahan/Desktop/pstat131/dtresults.rda")
+```
+```{r}
+load("/Users/ritahan/Desktop/pstat131/dtresults.rda")
+```
+
+
+
+```{r}
+dt_results %>%
+  collect_metrics()
+```
+
+```{r}
+dt_param_final <- dt_results %>%
+  select_best(metric = "accuracy")
+dt_param_final
+```
+
+```{r}
+final_dt_wf <- dt_wf %>%
+  finalize_workflow(dt_param_final)
+final_dt_wf
+```
+
+```{r}
+#fitting the final workflow to the train set
+dt_fit=fit(final_dt_wf, heart_train)
+#accurary of knn model
+dt_acc <- predict(dt_fit, new_data = heart_train, type = "class") %>% 
+  bind_cols(heart_train %>% 
+              select(heart_disease)) %>%
+  accuracy(truth = heart_disease, estimate = .pred_class)
+dt_acc
+```
+
+```{r}
+dt_fit %>%
+  extract_fit_engine() %>%
+  rpart.plot()
+```
+
+## Accuracy of Models
+```{r}
+rf_table_acc <- augment(rf_fit, new_data = heart_train) %>%
+  accuracy(heart_disease, estimate = .pred_class) %>%
+  select(.estimate)
+
+xgb_table_acc <- augment(xgb_fit, new_data = heart_train) %>%
+  accuracy(heart_disease, estimate = .pred_class) %>%
+  select(.estimate)
+
+knn_table_acc <- augment(knn_fit, new_data = heart_train) %>%
+  accuracy(heart_disease, estimate = .pred_class) %>%
+  select(.estimate)
+
+dt_table_acc <- augment(dt_fit, new_data = heart_train) %>%
+  accuracy(heart_disease, estimate = .pred_class) %>%
+  select(.estimate)
+
+heart_disease_train_acc=c(rf_table_acc$.estimate,
+                         xgb_table_acc$.estimate,
+                         knn_table_acc$.estimate,
+                         dt_table_acc$.estimate)
+
+model_names=c('Random Forest',
+               'XGBoost',
+               'K-Nearest Neighbor',
+               'Decision Tree')
+```
+
+```{r}
+acc_table <- tibble(Model = model_names,
+                             Accuracy = heart_disease_train_acc)
+
+acc_table
+```
+
+## Roc_auc of models
+```{r}
+rf_table_auc <- augment(rf_fit, new_data = heart_train) %>%
+  roc_auc(heart_disease, estimate = .pred_0) %>%
+  select(.estimate)
+
+xgb_table_auc <- augment(xgb_fit, new_data = heart_train) %>%
+  roc_auc(heart_disease, estimate = .pred_0) %>%
+  select(.estimate)
+
+knn_table_auc <- augment(knn_fit, new_data = heart_train) %>%
+  roc_auc(heart_disease, estimate = .pred_0) %>%
+  select(.estimate)
+
+dt_table_auc <- augment(dt_fit, new_data = heart_train) %>%
+  roc_auc(heart_disease, estimate = .pred_0) %>%
+  select(.estimate)
+
+heart_disease_train_auc=c(rf_table_auc$.estimate,
+                         xgb_table_auc$.estimate,
+                         knn_table_auc$.estimate,
+                         dt_table_auc$.estimate)
+
+```
+
+```{r}
+auc_table <- tibble(Model = model_names,
+                             Roc_auc = heart_disease_train_auc)
+
+auc_table
+```
+
+## Graphs for Model Evaluation
+Barplot of models' accuracy
+```{r}
+acc_table_bar_plot <- ggplot(acc_table, 
+       aes(x = Model, y = Accuracy)) + 
+  geom_bar(stat = "identity", width=0.2,  color = "black") + 
+  labs(title = "Accuracy Performance of Our Models") + 
+  theme_minimal()
+
+acc_table_bar_plot
+```
+Barplot of Models' roc-auc
+```{r}
+auc_table_bar_plot <- ggplot(auc_table, 
+       aes(x = Model, y = Roc_auc)) + 
+  geom_bar(stat = "identity", width=0.2,  color = "red") + 
+  labs(title = "Roc_auc Performance of Our Models") + 
+  theme_minimal()
+
+auc_table_bar_plot
+```
+From all the graphs above, all of the models perform fairly well. Among them, it is obvious that knn is the best-performing model. Next, we are going to fit it on to the test set.  
+
+## Predicting
+```{r}
+knn_heart_predict <- predict(knn_fit,  # fitting our model to testing data
+                              new_data = heart_test, 
+                              type = "class")
+
+knn_heart_predict_with_actual <- knn_heart_predict %>%
+  bind_cols(heart_test)  # adding the actual values side by side to our predicted values
+
+knn_heart_predict_with_actual
+```
+```{r}
+#accuracy on test set for knn
+knn_test_acc <- predict(knn_fit, new_data = heart_test, type = "class") %>% 
+  bind_cols(heart_test %>% 
+              select(heart_disease)) %>%
+  accuracy(truth = heart_disease, estimate = .pred_class)
+knn_test_acc
+```
+
+
+Roc Curve of Test Set Prediction in knn
+```{r}
+knn_prediction_roc_curve=augment(knn_fit, new_data=heart_test) %>%
+  roc_curve(heart_disease, estimate=.pred_0)
+autoplot(knn_prediction_roc_curve)
+
+```
+
+```{r}
+auc <- augment(knn_fit, new_data = heart_test) %>%
+  roc_auc(heart_disease, estimate = .pred_0) %>%
+  select(.estimate)
+auc
+```
+# 5.0 Conclusion:
+Through the whole analysis, the best model to predict the heart disease is KNN. The accuracy for the train set is 0.95, the roc-auc is 0.99, and the accuracy for the test set is 0.89, and the roc-auc is 0.93. The performance of all models were fairly well. From the importance variable plot, the most important variables are 'st_slope', 'excercise_angina', 'oldpeak' and the least important one is 'cholestoral'. This is surprising because I assume 'Age' would be an important variable.   
+The places that can be improved are creating regular grid for tuning if time and my computering power on Mac was enough. Also, the dataset has 916 observations which might be a small dataset after I remove some observations during model cleaning or dealing with NAs. It might be a more professional one if I combine more datasets to one, since heart disease prediction can be a extremely helpful for human beings.
